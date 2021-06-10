@@ -1,0 +1,775 @@
+#=========================================================================
+
+#M2C2 data cleaning
+#updated by Yiyuan Huang
+#credit to Peiyao Zhao
+#update date: 06-03-2021 
+
+#=========================================================================
+library(readxl)
+library(openxlsx)
+library(dplyr)
+library(nonmemica)
+
+#setwd("W:/Hayek Lab/Projects/M2C2/Datasets")
+#setwd("C:/Users/shayek/Dropbox (University of Michigan)/MED-Hayek Lab/Projects/M2C2/Datasets")
+
+setwd("E:/Documentation/research_lili/M2C2_COVID")
+
+data <- read.csv("M2C2_0602.csv", fileEncoding="UTF-8-BOM", na.strings = "")
+
+
+#Step 1: replace all 9999 or N/A, NA, NI in the dataset with empty/missing
+
+data[data==9999]<-NA
+data[data=='9999']<-NA
+data[data==999]<-NA
+data[data=='999']<-NA
+data[data=='N/A']<-NA
+data[data=='n/a']<-NA
+data[data=='NI']<-NA
+
+#=========handle 999 subject id===========
+#Sort by subject
+data<-data[order(data$subject),]
+data$subject <- replace(data$subject, is.na(data$subject), 999)
+
+#convert data to numeric
+#Note: This will not show error even if there's no particular column in the list, however it might affect the following process
+
+data[,names(data) %in% c('age','ethnicity','race','type_blood','weight','height','cr_hosp_adm',
+                       'supar1','crp','ferritin','d_dimer','ldh','il_6','bnp','hstrop','hstrop_2',
+                       'baseline_cr','smoker','home_meds_anti_htn___1','home_meds_anti_htn___2','mortality_status')] <- 
+  sapply(data[, names(data) %in% c('age','ethnicity','race','type_blood','weight','height','cr_hosp_adm',
+                                 'supar1','crp','ferritin','d_dimer','ldh','il_6','bnp','hstrop','hstrop_2',
+                                 'baseline_cr','smoker','home_meds_anti_htn___1','home_meds_anti_htn___2','mortality_status')], as.numeric) 
+
+#convert data to date
+#REQUIRE date values to have column names containing word "date"
+#data[,which(names(data) %contains% "date")]<-lapply(data[,which(names(data) %contains% "date")],as.numeric)
+#data[,which(names(data) %contains% "date")]<-lapply(data[,which(names(data) %contains% "date")],convertToDate)
+
+data[,which(names(data) %contains% "date")]<-lapply(data[,which(names(data) %contains% "date")],as.Date)
+
+
+#create variable
+#Hospcovid19=1 if date_ed=missing AND covidstatus=1, otherwise 0
+if(all(c('date_ed','covidstatus')%in%names(data))){
+  data$hospcovid19<-0
+  data$hospcovid19[is.na(data$date_ed)==T & data$covidstatus==1]<-1
+}else{
+  print("'date_ed' or 'covidstatus' column does not exist.")
+}
+
+
+#Age_cat : classifying age by <45(choose <=44), 45-64, 65-79, >=80
+if('age'%in%names(data)){
+  data$age_cat<-cut(data$age, breaks=c(-Inf,44,64,79, Inf),labels = F)-1
+}else{
+  print("'age' column does not exist.")
+}
+
+
+#Race_simp: reclassifying race and ethnicity: if ethnicity=1, race=1, race_simp=0 (non-hispanic white). 
+#If ethnicity=1, race=2, race_simp=1 (non-hispanic black). 
+#If ethnicity=0, race_simp=2 (Hispanics). if race=3, race_simp=3 (Asian). 
+#All other (race>3), race_simp=4 (Other)
+if(all(c('ethnicity','race')%in%names(data))){
+  data$race_simp[data$ethnicity==1 & (data$race==7|data$race==1)]<-0 #non-hispanic white
+  data$race_simp[data$ethnicity>0 & data$race==2]<-1 #non-hispanic black
+  data$race_simp[data$ethnicity==0]<-2 #Hispanics
+  data$race_simp[data$race==3]<-3 #Asian
+  data$race_simp[data$race>3]<-4 #Other
+}else{
+  print("'ethnicity' or 'race' column does not exist.")
+}
+
+#Bloodtype_simp: reclassifying type_blood: if type_blood=1 OR =2, bloodtype_symp=0 (A).if type_blood=3 OR 4, bloodtype_simp=1 (B)
+#if type_blood=5 OR 6, bloodtype_simp=2 (AB), if type_blood=7 OR 8, bloodtype_simp=3 (O)
+if('type_blood'%in%names(data)){
+  data$bloodtype_simp[data$type_blood%in%c(1,2)]<-0 #A
+  data$bloodtype_simp[data$type_blood%in%c(3,4)]<-1 #B
+  data$bloodtype_simp[data$type_blood%in%c(5,6)]<-2 #AB
+  data$bloodtype_simp[data$type_blood%in%c(7,8)]<-3 #O
+}else{
+  print("'type_blood' column does not exist.")
+}
+
+
+#Rhesus:reclassifying type_blood: if type_blood= 1 OR 3, OR 5 OR 7, rhesus=1, 
+#if type_blood=2 OR 4 OR 6 OR 8, rhesus=0
+if('type_blood'%in%names(data)){
+  data$rhesus[data$type_blood%in%c(1,3,5,7)]<-1
+  data$rhesus[data$type_blood%in%c(2,4,6,8)]<-0
+}else{
+  print("'type_blood' column does not exist.")
+}
+
+
+#Weightkg: if weight_unit=1, then weightkg=weight, if weight_unit=2, weightkg=weight*0.453592
+if(all(c('weight','weight_unit')%in%names(data))){
+  data$weightkg[data$weight_unit==1&!is.na(data$weight)&!is.na(data$weight_unit)]<-data$weight[data$weight_unit==1&!is.na(data$weight)&!is.na(data$weight_unit)]
+  data$weightkg[data$weight_unit==2&!is.na(data$weight)&!is.na(data$weight_unit)]<-data$weight[data$weight_unit==2&!is.na(data$weight)&!is.na(data$weight_unit)]*0.453592
+}else{
+  print("'weight' or 'weight_unit' column does not exist.")
+}
+
+
+#Weightlb: if weight_unit=2, then weightlb=weight, if weight_unit=1, weightlb=weight* 2.20462
+if(all(c('weight','weight_unit')%in%names(data))){
+  data$weightlb[data$weight_unit==2&!is.na(data$weight)&!is.na(data$weight_unit)]<-data$weight[data$weight_unit==2&!is.na(data$weight)&!is.na(data$weight_unit)]
+  data$weightlb[data$weight_unit==1&!is.na(data$weight)&!is.na(data$weight_unit)]<-data$weight[data$weight_unit==1&!is.na(data$weight)&!is.na(data$weight_unit)]*2.20462
+}else{
+  print("'weight' or 'weight_unit' column does not exist.")
+}
+
+
+#Heightcm: if height_unit=1, then heightcm=height, if height_unit=2, then heightcm=height*2.54
+if(all(c('height','height_unit')%in%names(data))){
+  data$heightcm[data$height_unit==1&!is.na(data$height)&!is.na(data$height_unit)]<-data$height[data$height_unit==1&!is.na(data$height)&!is.na(data$height_unit)]
+  data$heightcm[data$height_unit==2&!is.na(data$height)&!is.na(data$height_unit)]<-data$height[data$height_unit==2&!is.na(data$height)&!is.na(data$height_unit)]*2.54
+}else{
+  print("'height' or 'height_unit' column does not exist.")
+}
+
+
+#Heightin: if height_unit=2, then heightin=height, if height_unit=1, then heightcm=height*0.393701
+if(all(c('height','height_unit')%in%names(data))){
+  data$heightin[data$height_unit==2&!is.na(data$height)&!is.na(data$height_unit)]<-data$height[data$height_unit==2&!is.na(data$height)&!is.na(data$height_unit)]
+  data$heightin[data$height_unit==1&!is.na(data$height)&!is.na(data$height_unit)]<-data$height[data$height_unit==1&!is.na(data$height)&!is.na(data$height_unit)]*0.393701
+}else{
+  print("'height' or 'height_unit' column does not exist.")
+}
+
+
+#Bmi=weightkg/(heightcm/100)^2
+if(all(c('weightkg','heightcm')%in%names(data))){
+  data$bmi<-data$weightkg/(data$heightcm/100)^2
+}else{
+  print("'weightkg' or 'heightcm' column does not exist.")
+}
+
+
+#Bmi_cat categorize bmi according to the following categories <30(ie<=29), 30-34, 35-39, >=40
+if('bmi'%in%names(data)){
+  data$bmi_cat<-cut(data$bmi,breaks=c(-Inf,29,34,39, Inf),labels = F)-1
+}else{
+  print("'bmi' column does not exist.")
+}
+
+
+#  Adm_eGFR: = 141 * min(cr_hosp_adm/k,1)^alpha * max(cr_hosp_adm/k, 1)^-1.209 * 0.993^age * 1.018 [if male=2] * 1.159 [if race_simp=1]
+# k is 0.7 for male=2 and 0.9 for male=1, alpha is -0.329 for male=2 and -0.411 for male=1.
+# The "indicator func" should only be added according to male or race_simp.
+if(all(c('male','cr_hosp_adm','race_simp')%in%names(data))){
+  data$kk[data$male==2]<-0.7
+  data$kk[data$male==1]<-0.9
+  data$alpha[data$male==2]<--0.329 
+  data$alpha[data$male==1]<--0.411
+  data$adm_eGFR<-141*(apply(cbind(data$cr_hosp_adm/data$kk,1),1,min)^data$alpha)*
+    (apply(cbind(data$cr_hosp_adm/data$kk,1),1,max)^(-1.209))*
+    0.993^(data$age)*
+    ifelse(data$male==2,1.018,1)*ifelse(data$race_simp==1,1.159,1)
+  data<-data[,-which(names(data)%in%c("alpha","kk"))]  #delete col alpha & kk
+}else{
+  print("'male' or 'cr_hosp_adm' or 'race_simp' column does not exist.")
+}
+
+
+#Needicu: if icu_date>0 needicu=1, icu_date=missing, needicu=0
+if('icu_date'%in%names(data)){
+  data$needicu[data$icu_date>0]<-1
+  data$needicu[is.na(data$icu_date)]<-0
+}else{
+  print("'icu_date' does not exist.")
+}
+
+
+#Hxsmoking: if smoker>1, hxsmoking=1, if smoker=1, hxsmoking=0, if smoker=4, hxsmoking=2
+if('smoker'%in%names(data)){
+  data$hxsmoking[data$smoker>1]<-1
+  data$hxsmoking[data$smoker==1]<-0
+  data$hxsmoking[data$smoker==4]<-2
+}else{
+  print("'smoker' does not exist.")
+}
+
+
+#ACE_ARB: if home_meds_anti_htn___1 =1 OR home_meds_anti_htn___2=1, then ACE_ARB=1, otherwise 0
+if(all(c('home_meds_anti_htn___1','home_meds_anti_htn___2')%in%names(data))){
+  data$ACE_ARB<-0
+  data$ACE_ARB[data$home_meds_anti_htn___1==1|data$home_meds_anti_htn___2==1]<-1
+}else{
+  print("'home_meds_anti_htn___1' or 'home_meds_anti_htn___2' does not exist.")
+}
+
+
+#Biomarkers, need to convert all to log base 2 (may need to add +1 for the log-transformation because some of the variables have 0)
+#Supar1,crp, ferritin, d_dimer, ldh, il_6, bnp, hstrop, hstrop_2
+
+# replace 0 with min(nonzero value)/2
+#tmp<-data[,names(data)%in%c('supar1','crp','ferritin','d_dimer','ldh','il_6','bnp','hstrop','hstrop_2')]
+#tmp<-as.data.frame(sapply(tmp,function(x){ifelse(x==0, min(x[x>0],na.rm = T)/2,x)}))
+#
+#for (i in c('supar1','crp','ferritin','d_dimer','ldh','il_6','bnp','hstrop','hstrop_2')) {
+#  if(is.null(tmp[[i]])){
+#    print(paste(i,"column does not exist",sep = " "))
+#  }else{
+#    data[[paste(i,'log2',sep = "_")]]<-log2(tmp[[i]])
+#  }
+#}
+#rm(tmp)
+
+
+#Create categorical variables for each of these biomarkers stratified by tertiles(from 0)
+#this one creates categorical variables from ORIGINAL biomarkers
+#for (i in c('supar1','crp','ferritin','d_dimer','ldh','il_6','bnp','hstrop','hstrop_2')) {
+#  if(is.null(data[[i]])){
+#    print(paste(i,"column does not exist",sep = " "))
+#  }else{
+#   data[[paste(i,'tert',sep = "_")]]<-cut(data[[i]],quantile(data[[i]],probs = seq(0, 1, 1/3),na.rm = T),labels = F)-1
+#  }
+#}
+
+
+#Needmv: if SUM of (mech_vent___1:mech_vent___7, mech_vent2___1:mech_vent2___8)>0, the needmv=1, otherwise 0
+if(all(c(paste("mech_vent___",1:7,sep = ""),paste("mech_vent2___",1:7,sep = ""))%in%names(data))){
+  data$needmv<-0
+  data$needmv[rowSums(data[,paste("mech_vent___",1:7,sep = "")])+rowSums(data[,paste("mech_vent2___",1:7,sep = "")])>0]<-1
+}else{
+  print(paste(c(paste("mech_vent___",1:7,sep = ""),paste("mech_vent2___",1:8,sep = "")),' might not exist',sep = ""))
+}
+
+
+
+it<-function(x){
+  for( i in 1:14){
+    if(x[[i]]==1){
+      return(i*(x[[i]]==1))
+      break
+    }
+  }
+}
+
+
+#Mvdate= icu_date+ 1 (if mech_vent___1=1); +2 (if mech_vent___2=1), +3 (if mech_vent___3=1) etc. until +14 for mech_vent2___7=1
+if(all(c(paste("mech_vent___",1:7,sep = ""),paste("mech_vent2___",1:7,sep = ""),'icu_date','needmv')%in%names(data))){
+  tmp_date<-data[,c(paste("mech_vent___",1:7,sep = ""),paste("mech_vent2___",1:7,sep = ""))]
+  tmp_date$new<-apply(tmp_date,1,it)
+  tmp_date$new[tmp_date$new=='NULL']<-0
+  data$mvdate<-data$icu_date+as.numeric(tmp_date$new)
+  data$mvdate[data$needmv==0]<-NA
+  rm(tmp_date)
+}else{
+  print(paste(c(paste("mech_vent___",1:7,sep = ""),paste("mech_vent2___",1:7,sep = "")),'might not exist',sep = " "))
+  print("Or 'icu_date' or 'needmv' might not exist")
+}
+
+
+#Needrrt: if SUM of (rrt___1:rrt___7, rrt2___1:rrt2___7) > 0, the needrrt=1, otherwise 0
+if(all(c(paste("rrt___",1:7,sep = ""),paste("rrt_2___",1:7,sep = ""))%in%names(data))){
+  data$needrrt<-0
+  data$needrrt[rowSums(data[,paste("rrt___",1:7,sep = "")])+rowSums(data[,paste("rrt_2___",1:7,sep = "")])>0]<-1
+}else{
+  print(paste(c(paste("rrt___",1:7,sep = ""),paste("rrt_2___",1:7,sep = "")),' might not exist',sep = ""))
+}
+
+
+#rrtdate= icu_date+ 1 (if rrt___1=1); +2 (if rrt___2=1), +3 (if rrt___3=1) etc. until +14 for rrt2___7=1
+if(all(c(paste("rrt___",1:7,sep = ""),paste("rrt_2___",1:7,sep = ""),'icu_date','needrrt')%in%names(data))){
+  tmp_date<-data[,c(paste("rrt___",1:7,sep = ""),paste("rrt_2___",1:7,sep = ""))]
+  tmp_date$new<-apply(tmp_date,1,it)
+  tmp_date$new[tmp_date$new=='NULL']<-0
+  data$rrtdate<-data$icu_date+as.numeric(tmp_date$new)
+  data$rrtdate[data$needrrt==0]<-NA
+  rm(tmp_date)
+}else{
+  print(paste(c(paste("rrt___",1:7,sep = ""),paste("rrt_2___",1:7,sep = "")),'might not exist',sep = " "))
+  print("Or 'icu_date' or 'needrrt' might not exist")
+}
+
+
+#Needecmo: if SUM of (ecmo___1:ecmo___7, ecmo2___1:ecmo2___7) > 0, the needecmo=1, otherwise 0
+if(all(c(paste("ecmo___",1:7,sep = ""),paste("ecmo_2___",1:7,sep = ""))%in%names(data))){
+  data$needecmo<-0
+  data$needecmo[rowSums(data[,paste("ecmo___",1:7,sep = "")])+rowSums(data[,paste("ecmo_2___",1:7,sep = "")])>0]<-1
+}else{
+  print(paste(c(paste("ecmo___",1:7,sep = ""),paste("ecmo_2___",1:7,sep = "")),' might not exist',sep = ""))
+}
+
+
+#Ecmodate= icu_date+ 1 (if ecmo___1=1); +2 (if ecmo___2=1), +3 (if ecmo___3=1) etc. up to +14 for ecmo2___7=1
+if(all(c(paste("ecmo___",1:7,sep = ""),paste("ecmo_2___",1:7,sep = ""),'icu_date','needecmo')%in%names(data))){
+  tmp_date<-data[,c(paste("ecmo___",1:7,sep = ""),paste("ecmo_2___",1:7,sep = ""))]
+  tmp_date$new<-apply(tmp_date,1,it)
+  tmp_date$new[tmp_date$new=='NULL']<-0
+  data$ecmodate<-data$icu_date+as.numeric(tmp_date$new)
+  data$ecmodate[data$needecmo==0]<-NA
+  rm(tmp_date)
+}else{
+  print(paste(c(paste("ecmo___",1:7,sep = ""),paste("ecmo_2___",1:7,sep = "")),'might not exist',sep = " "))
+  print("Or 'icu_date' or 'needecmo' might not exist")
+}
+
+
+#Needmechcard: if SUM of (mech_card___1:mech_card___7, mech_card2___1:mech_card2___7) > 0, the Needmechcard =1, otherwise 0
+if(all(c(paste("mech_card___",1:7,sep = ""),paste("mech_card2___",1:7,sep = ""))%in%names(data))){
+  data$needmechcard<-0
+  data$needmechcard[rowSums(data[,paste("mech_card___",1:7,sep = "")])+rowSums(data[,paste("mech_card2___",1:7,sep = "")])>0]<-1
+}else{
+  print(paste(c(paste("mech_card___",1:7,sep = ""),paste("mech_card2___",1:7,sep = "")),' might not exist',sep = ""))
+}
+
+
+#mechcarddate= icu_date+ 1 (if mech_card___1=1); +2 (if mech_card___2=1), +3 (if mech_card___3=1) etc. up to +14 for mech_card2___7=1
+if(all(c(paste("mech_card___",1:7,sep = ""),paste("mech_card2___",1:7,sep = ""),'icu_date','needmechcard')%in%names(data))){
+  tmp_date<-data[,c(paste("mech_card___",1:7,sep = ""),paste("mech_card2___",1:7,sep = ""))]
+  tmp_date$new<-apply(tmp_date,1,it)
+  tmp_date$new[tmp_date$new=='NULL']<-0
+  data$mechcarddate<-data$icu_date+as.numeric(tmp_date$new)
+  data$mechcarddate[data$needmechcard==0]<-NA
+  rm(tmp_date)
+}else{
+  print(paste(c(paste("mech_card___",1:7,sep = ""),paste("mech_card2___",1:7,sep = "")),'might not exist',sep = " "))
+  print("Or 'icu_date' or 'needmechcard' might not exist")
+}
+
+
+#Death: if mortality_status=2, death=1, otherwise 0
+if(c('mortality_status')%in%names(data)){
+  data$death<-0
+  data$death[data$mortality_status==2]<-1
+}else{
+  print("'mortality_status' does not exist.")
+}
+
+#************admit_date_original****************
+#keep the original admission date
+data$admit_date_orig <- data$admit_date
+
+#Replace admit_date value with date_umtx value if date_umtx exist
+if(c('date_umtx') %in% names(data)){
+  data$admit_date[!is.na(data$date_umtx)]<-data$date_umtx[!is.na(data$date_umtx)]
+}else{
+  print("'date_umtx' does not exist.")
+}
+
+#============timetodc: (date_dead OR date_dchosp) - admit_date
+if(all(c('date_dead','date_dchosp','admit_date')%in%names(data))){
+  data$timetodc[is.na(data$date_dchosp)]<-as.numeric(difftime(data$date_dead[is.na(data$date_dchosp)], data$admit_date[is.na(data$date_dchosp)], units="days"))
+  data$timetodc[is.na(data$date_dead)]<-as.numeric(difftime(data$date_dchosp[is.na(data$date_dead)], data$admit_date[is.na(data$date_dead)], units="days"))
+}else{
+  print("'date_dead' or 'date_dchosp' or 'admit_date' does not exist.")
+}
+
+#***********timetodc_orig: (date_dead OR date_dchosp) - admit_date_orig
+if(all(c('date_dead','date_dchosp','admit_date_orig') %in% names(data))){
+  data$timetodc_orig[is.na(data$date_dchosp)]<-as.numeric(difftime(data$date_dead[is.na(data$date_dchosp)], data$admit_date_orig[is.na(data$date_dchosp)], units="days"))
+  data$timetodc_orig[is.na(data$date_dead)]<-as.numeric(difftime(data$date_dchosp[is.na(data$date_dead)], data$admit_date_orig[is.na(data$date_dead)], units="days"))
+}else{
+  print("'date_dead' or 'date_dchosp' or 'admit_date_orig' does not exist.")
+}
+
+#===========Timetodeath: date_dead - admit_date
+if(all(c('date_dead','admit_date')%in%names(data))){
+  data$timetodeath<-as.numeric(difftime(data$date_dead,data$admit_date, units="days"))
+  data$timetodeath[is.na(data$timetodeath)] <- data$timetodc[is.na(data$timetodeath)]
+}else{
+  print("'date_dead' or 'admit_date' does not exist.")
+}
+
+#***********timetodeath_orig=date_dead - admit_date_original
+if(all(c('date_dead','admit_date_orig')%in%names(data))){
+  data$timetodeath_orig <-as.numeric(difftime(data$date_dead,data$admit_date_orig, units="days"))
+  data$timetodeath_orig[is.na(data$timetodeath_orig)] <- data$timetodc_orig[is.na(data$timetodeath_orig)]
+}else{
+  print("'date_dead' or 'admit_date_orig' does not exist.")
+}
+
+#===========timetoICU: icu_date - admit_date
+if(all(c('icu_date','admit_date')%in%names(data))){
+  data$timetoICU<-as.numeric(difftime(data$icu_date,data$admit_date, units="days"))
+  data$timetoICU[is.na(data$timetoICU)] <- data$timetodc[is.na(data$timetoICU)]
+}else{
+  print("'icu_date' or 'admit_date' does not exist.")
+}
+
+#***********timetoICU_orig: icu_date - admit_date_orig
+if(all(c('icu_date','admit_date_orig')%in%names(data))){
+  data$timetoICU_orig<-as.numeric(difftime(data$icu_date,data$admit_date_orig, units="days"))
+  data$timetoICU_orig[is.na(data$timetoICU_orig)] <- data$timetodc_orig[is.na(data$timetoICU_orig)]
+}else{
+  print("'icu_date' or 'admit_date_orig' does not exist.")
+}
+
+#==============timetomv: mvdate - admit_date
+if(all(c('mvdate','admit_date')%in%names(data))){
+  data$timetomv<-as.numeric(difftime(data$mvdate, data$admit_date, units="days"))
+  data$timetomv[is.na(data$timetomv)] <- data$timetodc[is.na(data$timetomv)]
+}else{
+  print("'mvdate' or 'admit_date' does not exist.")
+}
+
+#***********timetomv_orig=mvdate - admit_date_original
+if(all(c('mvdate','admit_date_orig') %in% names(data))){
+  data$timetomv_orig <- as.numeric(difftime(data$mvdate, data$admit_date_orig, units="days"))
+  data$timetomv_orig[is.na(data$timetomv_orig)] <- data$timetodc_orig[is.na(data$timetomv_orig)]
+}else{
+  print("'mvdate' or 'admit_date_orig' does not exist.")
+}
+
+#=============timetorrt: rrtdate - admit_date
+if(all(c('rrtdate','admit_date')%in%names(data))){
+  data$timetorrt<-as.numeric(difftime(data$rrtdate,data$admit_date, units="days"))
+  data$timetorrt[is.na(data$timetorrt)] <- data$timetodc[is.na(data$timetorrt)]
+}else{
+  print("'rrtdate' or 'admit_date' does not exist.")
+}
+
+#************timetorrt_orig: rrtdate - admit_date_orig
+if(all(c('rrtdate','admit_date_orig')%in%names(data))){
+  data$timetorrt_orig <- as.numeric(difftime(data$rrtdate,data$admit_date_orig, units="days"))
+  data$timetorrt_orig[is.na(data$timetorrt_orig)] <- data$timetodc_orig[is.na(data$timetorrt_orig)]
+}else{
+  print("'rrtdate' or 'admit_date_orig' does not exist.")
+}
+
+#===========timetomech: mechcarddate - admit_date
+if(all(c('mechcarddate','admit_date')%in%names(data))){
+  data$timetomech<-as.numeric(difftime(data$mechcarddate,data$admit_date, units="days"))
+  data$timetomech[is.na(data$timetomech)] <- data$timetodc[is.na(data$timetomech)]
+}else{
+  print("'mechcarddate' or 'admit_date' does not exist.")
+}
+
+#**********timetomech_orig: mechcarddate - admit_date_orig
+if(all(c('mechcarddate','admit_date_orig')%in%names(data))){
+  data$timetomech_orig <- as.numeric(difftime(data$mechcarddate,data$admit_date_orig, units="days"))
+  data$timetomech_orig[is.na(data$timetomech_orig)] <- data$timetodc_orig[is.na(data$timetomech_orig)]
+}else{
+  print("'mechcarddate' or 'admit_date_orig' does not exist.")
+}
+
+#==========timetoecmo: ecmodate - admit_date
+if(all(c('ecmodate','admit_date')%in%names(data))){
+  data$timetoecmo<-as.numeric(difftime(data$ecmodate,data$admit_date, units="days"))
+  data$timetoecmo[is.na(data$timetoecmo)] <- data$timetodc[is.na(data$timetoecmo)]
+}else{
+  print("'ecmodate' or 'admit_date' does not exist.")
+}
+
+#***************timetoecmo_orig: ecmodate - admit_date_orig
+if(all(c('ecmodate','admit_date_orig')%in%names(data))){
+  data$timetoecmo_orig<-as.numeric(difftime(data$ecmodate,data$admit_date_orig, units="days"))
+  data$timetoecmo_orig[is.na(data$timetoecmo_orig)] <- data$timetodc_orig[is.na(data$timetoecmo_orig)]
+}else{
+  print("'ecmodate' or 'admit_date_orig' does not exist.")
+}
+
+#===========icu_min: earliest date between icu_date and icu_osh_date
+if(all(c('icu_date','icu_osh_date')%in%names(data))){
+  data$icu_min<-apply(data[c('icu_date','icu_osh_date')], 1, function(x)min(x,na.rm = T))
+  data$icu_min<-as.Date(data$icu_min)
+}else{
+  print("'icu_date' or 'icu_osh_date' does not exist.")
+}
+
+
+#icu_los: (date_dead OR date_dchosp) - icu_date
+if(all(c('date_dead','date_dchosp','icu_date','icu_min')%in%names(data))){
+  data$icu_los[is.na(data$date_dchosp)]<-as.numeric(difftime(data$date_dead[is.na(data$date_dchosp)], data$icu_min[is.na(data$date_dchosp)], units="days"))
+  data$icu_los[is.na(data$date_dead)]<-as.numeric(difftime(data$date_dchosp[is.na(data$date_dead)],data$icu_min[is.na(data$date_dead)], units="days"))
+}else{
+  print("'date_dead' or 'date_dchosp' or 'icu_date'or'icu_min' does not exist.")
+}
+
+#AKIstage=1 if peak_scr>= cr_hosp_adm +0.3; AKIstage=2 If peak_scr>= cr_hosp_adm*2, 
+#AKIstage=3 IF peak_scr>= cr_hosp_adm*3 OR peak_scr>=4 OR needrrt=1
+if(all(c('peak_scr','cr_hosp_adm','needrrt')%in%names(data))){
+  data$AKIstage[data$peak_scr>= (data$cr_hosp_adm +0.3)]<-1
+  data$AKIstage[data$peak_scr>= data$cr_hosp_adm*2]<-2
+  data$AKIstage[data$peak_scr>= data$cr_hosp_adm*3 | data$peak_scr>=4 | data$needrrt==1]<-3
+}else{
+  print("'peak_scr' or 'cr_hosp_adm' or 'needrrt' does not exist.")
+}
+
+
+#age
+data$age_score<-0
+data$age_score[data$age<50]<-0
+data$age_score[data$age>=50&data$age<=59]<-2
+data$age_score[data$age>=60&data$age<=69]<-4
+data$age_score[data$age>=70&data$age<=79]<-6
+data$age_score[data$age>=80]<-7
+
+#Sex at birth = male (female=2, male =1)
+data$sex_score<-0
+data$sex_score[data$male==1]<-1
+
+#No of comorbidities
+tmp<-data[c("comorbidity_cv_pulm___1", "comorbidity_cv_pulm___3", "comorbidity_cv_pulm___4", 
+            "comorbidity_cv_pulm___6", "comorbidity_other___1", "comorbidity_other___2",
+            "comorbidity_other___3", "comorbidity_other___4", "comorbidity_other___5", 
+            "comorbidity_cv_pulm___10")]
+data$num_comorbidities<-rowSums((tmp),na.rm = T)
+data$comorbidities_score<-0
+data$comorbidities_score[data$num_comorbidities==1]<-1
+data$comorbidities_score[data$num_comorbidities>=2]<-2
+rm(tmp)
+
+#Respiratory Rate
+data$resp_score<-as.numeric(cut(data$resp,breaks = c(-Inf,19,29,Inf)))-1
+data$resp_score[is.na(data$resp_score)]<-0
+
+#Peripheral oxygen saturation
+data$spo2_score<-0
+data$spo2_score[data$spo2<92]<-2
+
+#Glascow Coma Scale: =1 means <15
+data$ams_score<-0
+data$ams_score[data$ams==1]<-2
+
+#Urea 
+data$bun_score<-0
+data$bun_score[data$bun<=7]<-0
+data$bun_score[data$bun>7&data$bun<=14]<-1
+data$bun_score[data$bun>14]<-3
+
+#C-reactive protein 
+data$CRP_score<-as.numeric(cut(data$crp,breaks = c(-Inf,49,99,Inf)))-1
+data$CRP_score[is.na(data$CRP_score)]<-0
+
+#4C Mortality Score
+data$Mortality_Score<-rowSums(data[c("age_score","sex_score","comorbidities_score","resp_score",
+                                     "spo2_score","ams_score","bun_score","CRP_score")])
+
+
+#=================ADD BY YIYUAN======================================================================
+#COMPUTE remd_glucocort=sum(abx_antiviral___4,anti_inflam___1).
+
+#*********death_30_days=1 if mortality_status=2 or (death_fu=1 and posthosp_fu - date_dchosp <=30 )
+
+
+data$remd_glucocort <- data$abx_antiviral___4 + data$anti_inflam___1
+
+#RECODE race_simp (1=1) (ELSE=0) INTO Blacks.
+#VARIABLE LABELS  Blacks 'Blacks'.
+
+#RECODE hxsmoking (1 thru Highest=1) (ELSE=0).
+
+#RECODE institution (1=1) (2=1) (ELSE=0) INTO US_Europe.
+#VARIABLE LABELS  US_Europe 'US or Europe'.
+
+#RECODE remd_glucocort (1 thru Highest=1) (ELSE=0).
+
+#RECODE adm_eGFR (SYSMIS=SYSMIS) (60 thru Highest=1) (ELSE=0) INTO adm_eGFR_60.
+#VARIABLE LABELS  adm_eGFR_60 'eGFR >= 60'.
+
+#RECODE age (65 thru Highest=1) (ELSE=0) INTO Age_65.
+#VARIABLE LABELS  Age_65 'Age 65+'.
+
+#RECODE spo2 (SYSMIS=SYSMIS) (Lowest thru 89=1) (ELSE=0) INTO Hypoxia.
+ #VARIABLE LABELS  Hypoxia 'Hypoxia'.
+
+data <- data %>%
+  mutate(Blacks=race_simp==1,
+         hxsmoking=hxsmoking>=1,
+         US_Europe=(institution==1 | institution==2),
+         remd_glucocort=remd_glucocort>=1,
+         #adm_eGFR_60=adm_eGFR>=60,
+         Age_65=age>=65,
+         Hypoxia=(spo2<90|o2==1)|(data$needmv==1 & data$timetomv<2))
+
+#RECODE covidstatus (SYSMIS=1).
+
+data$covidstatus <- replace(data$covidstatus, NA, 1)
+
+#RECODE needrrt (SYSMIS=0).
+
+data$needrrt <- replace(data$needrrt, NA, 0)
+
+#RECODE death (SYSMIS=0).
+
+data$death <- replace(data$death, NA, 0)
+
+#RECODE needmv (SYSMIS=0).
+
+data$needmv <- replace(data$needmv, NA, 0)
+
+#COMPUTE comboutcome=SUM(needmv, needrrt, death).
+#RECODE comboutcome (1 thru Highest=1) (ELSE=0).
+
+#COMPUTE inhospACEARB=sum(other_meds___2,other_meds___3).
+#RECODE inhospACEARB (1 thru Highest=1) (ELSE=0).
+
+#COMPUTE timeonsetsx=DATEDIFF(admit_date,date_symptoms,"days").
+
+#COMPUTE age_10=age/10.
+
+#COMPUTE bmi_5=bmi/5.
+
+#COMPUTE adm_eGFR_5=adm_eGFR/5.
+
+data <- data %>%
+  mutate(comboutcome = (needmv+needrrt+death)>=1,
+         inhospACEARB = (other_meds___2 + other_meds___3) >= 1,
+         timeonsetsx=date_symptoms - admit_date,
+         age_10=age/10,
+         bmi_5=bmi/5,
+         adm_eGFR_5=adm_eGFR/5)
+
+
+#IF  (ABS(supar1_day)<3) supar_48=supar1.
+data[which(abs(data$supar1_day)<3), names(data) %in% c("supar_48")] <-
+  data[which(abs(data$supar1_day)<3), names(data) %in% c("supar_1")]
+
+#DO IF  (newinfection_cx___1=1 OR newinfection_cx___2=1 OR newinfection_cx___3=1 OR newinfection_cx___4=1).
+#RECODE newinfection (1=1) (SYSMIS=0) (ELSE=0) INTO newinfection_confirmed.
+#END IF.
+#VARIABLE LABELS  newinfection_confirmed 'Secondary Infection Confirmed'.
+
+#DO IF  (newinfection_cx___0).
+#RECODE newinfection (1=1) (SYSMIS=0) (ELSE=0) INTO newinfection_suspected.
+#END IF.
+#VARIABLE LABELS  newinfection_suspected 'Secondary Infection Suspected'.
+
+data <- data %>%
+  mutate(newinfection_confirmed=(newinfection_cx___1==1 | newinfection_cx___2==1 | newinfection_cx___3==1 | newinfection_cx___4==1),
+         newinfection_suspected=newinfection_cx___0==1)
+data$newinfection_confirmed <- replace(data$newinfection_confirmed, is.na(data$newinfection_confirmed), 0)
+data$newinfection_suspected <- replace(data$newinfection_suspected, is.na(data$newinfection_suspected), 0)
+
+
+#DO IF (newinfection_confirmed=1).
+#RECODE newinfection (1=2) (SYSMIS=0) (ELSE=0) INTO newinfection_class.
+#END IF.
+#VARIABLE LABELS  newinfection_class 'Secondary Infection Class'.
+
+#DO IF (newinfection_suspected=1).
+#RECODE newinfection_class (0=1) (1=1) (SYSMIS=0) (ELSE=0).
+#END IF.
+#RECODE newinfection_confirmed newinfection_suspected newinfection_class (SYSMIS=0).
+
+data <- data %>%
+  mutate(newinfection_class = 2 * (newinfection_confirmed==1 & newinfection==1))
+
+data$newinfection_class <- replace(data$newinfection_class, data$newinfection_suspected==1 & 
+                                                               (data$newinfection_class==0 |
+                                                                  data$newinfection_class==1), 1)
+#supar_48
+data$supar_48 <- data$supar1
+data$supar_48 <- replace(data$supar_48, (data$supar1_day>=3 | data$supar1_day<=-2), NA) 
+
+#ntile function
+
+tile<-function(data, n){
+  # Find tiles
+  vTert = quantile(data, c(0:n/n), na.rm=T)
+
+  # classify values
+  tile = cut(data, vTert, include.lowest = T, labels = 1:n)
+  return(tile)
+}
+
+#rank supar_48 /ntiles(3) into suPAR_tert.
+
+data$suPAR_tert <- tile(data$supar_48,3)
+
+#rank il_6 /ntiles(3) into il_6_tert.
+
+data$il_6_tert <- tile(data$il_6,3)
+
+#rank d_dimer /ntiles(3) into d_dimer_tert.
+
+data$d_dimer_tert <- tile(data$d_dimer,3)
+
+#rank ldh /ntiles(3) into ldh_tert.
+
+data$ldh_tert <- tile(data$ldh,3)
+
+#rank crp /ntiles(3) into crp_tert.
+
+data$d_crp_tert <- tile(data$crp,3)
+
+#rank ferritin /ntiles(3) into ferritin_tert.
+
+data$ferritin_tert <- tile(data$ferritin,3)
+
+#rank procal /ntiles(3) into procal_tert.
+
+data$procal_tert <- tile(data$procal,3)
+
+
+#rank supar_48 /ntiles(4) into suPAR_QRT.
+
+#rank il_6 /ntiles(4) into il_6_QRT.
+
+#rank d_dimer /ntiles(4) into d_dimer_QRT.
+
+#rank ldh /ntiles(4) into ldh_QRT.
+
+#rank crp /ntiles(4) into crp_QRT.
+
+#rank ferritin /ntiles(4) into ferritin_QRT.
+
+#rank procal /ntiles(4) into procal_QRT.
+
+data$suPAR_QRT <- tile(data$supar_48,4)
+data$il_6_QRT <- tile(data$il_6,4)
+data$d_dimer_QRT <- tile(data$d_dimer,4)
+data$dldh_QRT <- tile(data$ldh,4)
+data$d_crp_QRT <- tile(data$crp,4)
+data$ferritin_QRT <- tile(data$ferritin,4)
+data$procal_QRT <- tile(data$procal,4)
+
+#COMPUTE supar_48_log2=LN(supar_48)/LN(2).
+
+#COMPUTE il_6_log2=LN(il_6)/LN(2).
+
+#COMPUTE d_dimer_log2=LN(d_dimer)/LN(2).
+
+#COMPUTE ferritin_log2=LN(ferritin)/LN(2).
+
+#COMPUTE crp_log2=LN(crp)/LN(2).
+
+#COMPUTE ldh_log2=LN(ldh)/LN(2).
+
+#COMPUTE procal_log2=LN(procal+1)/LN(2).
+
+data$supar_48_log2 <- log2(data$supar_48)
+data$il_6_log2 <- log2(data$il_6)
+data$d_dimer_log2 <- log2(data$d_dimer)
+data$dldh_log2 <- log2(data$ldh)
+data$d_crp_log2 <- log2(data$crp)
+data$ferritin_log2 <- log2(data$ferritin)
+data$procal_log2 <- log2(data$procal)
+
+#composite death
+#death_comp= 1 if (death=1 OR discharge_location_ecmo=5 OR (death_fu=1 AND posthosp_fu-date_dchosp<= 30 days))
+death_comp <- death==1 | discharge_location_ecmo==5
+
+#death_comp30= 1 if (death=1 OR discharge_location_ecmo=5 OR (death_fu=1 AND posthosp_fu-date_dchosp<= 30 days))
+
+#death_comp= 1 if (death=1 OR discharge_location_ecmo=5)
+#compoutcome30 = 1 IF (deathcomp30=1, needmv=1, needRRT=1)
+#compoutcome = 1 IF (death_comp =1, need mv=1, needrrt =1)
+
+
+library(lubridate)
+
+temp <- data %>% filter((ymd(posthosp_fu)-ymd(date_dchosp)) > 30)
+
+#replace TRUE/FALSE as 1/0
+data <- replace(data, data==TRUE, 1)
+data <- replace(data, data==FALSE, 0)
+data_char <- sapply(data, as.character)
+data_char[is.na(data_char)] <- ""
+
+#=================generate the file===========================
+#wb <- createWorkbook()
+#addWorksheet(wb, "new")
+#options("openxlsx.dateFormat" = "mm/dd/yyyy")
+#writeData(wb,"new", data)
+#saveWorkbook(wb,"M2C2_PROCESSED.xlsx")
+
+write.csv(data_char, "E:/Documentation/research_lili/M2C2_COVID/M2C2_cleaned_0602.csv")
